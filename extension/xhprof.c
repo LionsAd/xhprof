@@ -541,19 +541,44 @@ void hp_clean_profiler_state()
  */
 size_t hp_get_entry_name(hp_entry_t *entry, char *result_buf, size_t result_len)
 {
-    size_t len;
+    // First, get the entry name into the buffer
+    size_t name_len = ZSTR_LEN(entry->name_hprof);
+    size_t copy_len = (name_len < result_len) ? name_len : result_len - 1;
+    strncpy(result_buf, ZSTR_VAL(entry->name_hprof), copy_len);
+    result_buf[copy_len] = '\0';
 
-    /* Add '@recurse_level' if required */
-    /* NOTE:  Dont use snprintf's return val as it is compiler dependent */
-    if (entry->rlvl_hprof) {
-        len = snprintf(result_buf, result_len, "%s@%d", ZSTR_VAL(entry->name_hprof), entry->rlvl_hprof);
-    } else {
-        len = snprintf(result_buf, result_len, "%s", ZSTR_VAL(entry->name_hprof));
+    // If no recursion level, we're done
+    if (!entry->rlvl_hprof) {
+        return copy_len;
     }
 
-    return len;
-}
+    // Check if we have space for at least "@" and one digit
+    if (copy_len + 2 >= result_len) {
+        return copy_len;
+    }
 
+    // Add the "@"
+    result_buf[copy_len] = '@';
+
+    // Convert the recursion level
+    char num_buf[20];
+    size_t num_len;
+    bool is_negative;
+    char *num_str = ap_php_conv_10(entry->rlvl_hprof, true, &is_negative,
+                                 &num_buf[sizeof(num_buf)], &num_len);
+
+    // Copy as much of the number as we can fit
+    size_t remaining = result_len - (copy_len + 1) - 1;  // -1 for null term
+    size_t num_copy_len = (num_len < remaining) ? num_len : remaining;
+
+    if (num_copy_len > 0) {
+        strncpy(result_buf + copy_len + 1, num_str, num_copy_len);
+        copy_len += 1 + num_copy_len;
+        result_buf[copy_len] = '\0';
+    }
+
+    return copy_len;
+}
 
 /**
  * Build a caller qualified name for a callee.
