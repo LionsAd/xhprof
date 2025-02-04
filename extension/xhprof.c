@@ -245,6 +245,15 @@ static void php_xhprof_init_globals(zend_xhprof_globals *xhprof_globals)
     if (xhprof_globals->sampling_interval < XHPROF_MINIMAL_SAMPLING_INTERVAL) {
         xhprof_globals->sampling_interval = XHPROF_MINIMAL_SAMPLING_INTERVAL;
     }
+
+    xhprof_globals->function_counter = 0;
+    xhprof_globals->function_map = NULL;
+    xhprof_globals->stats_array.count = 0;
+    xhprof_globals->stats_array.capacity = 0;
+    xhprof_globals->stats_array.entries = NULL;
+    xhprof_globals->stats_array.index_map = NULL;
+
+    xhprof_globals->entry_free_list = NULL;
 }
 
 /**
@@ -681,6 +690,80 @@ void hp_inc_count(zval *counts, char *name, zend_long count)
         zend_hash_str_update(ht, name, strlen(name), &val);
     }
 
+}
+
+static void hp_convert_stats_to_php_array()
+{
+    hp_stat_vector *arr = &XHPROF_G(stats_array);
+    char symbol[SCRATCH_BUF_LEN];
+
+    // Initialize stats_count if not already done
+    if (Z_TYPE(XHPROF_G(stats_count)) == IS_UNDEF) {
+        array_init(&XHPROF_G(stats_count));
+    }
+
+    // Process each stats entry
+    for (size_t i = 0; i < arr->count; i++) {
+        hp_stat_entry *stats = &arr->entries[i];
+        hp_composite_key key = hp_decompose_key(stats->key);
+        zval *counts;
+
+        // Get function names from IDs
+        zend_string *child_name = zend_hash_index_find_ptr(XHPROF_G(function_map), key.child_id);
+        if (!child_name) {
+            continue;
+        }
+
+        // Format the symbol key
+        if (key.parent_id > 0) {
+            zend_string *parent_name = zend_hash_index_find_ptr(XHPROF_G(function_map), key.parent_id);
+            if (!parent_name) {
+                continue;
+            }
+
+            if (key.recursion_level > 0) {
+                snprintf(symbol, SCRATCH_BUF_LEN, "%s==>%s@%d",
+                    ZSTR_VAL(parent_name),
+                    ZSTR_VAL(child_name),
+                    key.recursion_level);
+            } else {
+                snprintf(symbol, SCRATCH_BUF_LEN, "%s==>%s",
+                    ZSTR_VAL(parent_name),
+                    ZSTR_VAL(child_name));
+            }
+        } else {
+            if (key.recursion_level > 0) {
+                snprintf(symbol, SCRATCH_BUF_LEN, "%s@%d",
+                    ZSTR_VAL(child_name),
+                    key.recursion_level);
+            } else {
+                snprintf(symbol, SCRATCH_BUF_LEN, "%s",
+                    ZSTR_VAL(child_name));
+            }
+        }
+
+        // Find or create stats array for this symbol
+        counts = zend_hash_str_find(Z_ARRVAL(XHPROF_G(stats_count)), symbol, strlen(symbol));
+        if (counts == NULL) {
+            zval count_val;
+            array_init(&count_val);
+            counts = zend_hash_str_update(Z_ARRVAL(XHPROF_G(stats_count)),
+                                        symbol, strlen(symbol), &count_val);
+        }
+
+        // Update stats
+        hp_inc_count(counts, "ct", stats->ct);
+        hp_inc_count(counts, "wt", stats->wt);
+
+        if (XHPROF_G(xhprof_flags) & XHPROF_FLAGS_CPU) {
+            hp_inc_count(counts, "cpu", stats->cpu);
+        }
+
+        if (XHPROF_G(xhprof_flags) & XHPROF_FLAGS_MEMORY) {
+            hp_inc_count(counts, "mu", stats->mu);
+            hp_inc_count(counts, "pmu", stats->pmu);
+        }
+    }
 }
 
 /**
@@ -1206,6 +1289,13 @@ static void hp_begin(zend_long level, zend_long xhprof_flags)
         /* start profiling from fictitious main() */
         XHPROF_G(root) = zend_string_init(ROOT_SYMBOL, sizeof(ROOT_SYMBOL) - 1, 0);
 
+        /* Allocate function map and stats */
+        ALLOC_HASHTABLE(XHPROF_G(function_map));
+        zend_hash_init(XHPROF_G(function_map), 1024, NULL, NULL, 0);
+        XHPROF_G(function_counter) = 0;
+
+        hp_init_stats_array();
+
         /* start profiling from fictitious main() */
         begin_profiling(XHPROF_G(root), NULL);
     }
@@ -1241,8 +1331,25 @@ static void hp_stop()
         end_profiling();
     }
 
+    hp_convert_stats_to_php_array();
+
     /* Stop profiling */
     XHPROF_G(enabled) = 0;
+
+    // Cleanup
+    if (XHPROF_G(function_map)) {
+        zend_string *str;
+        for (uint32_t i = 0; i <= XHPROF_G(function_counter); i++) {
+            str = zend_hash_index_find_ptr(XHPROF_G(function_map), i);
+            if (str) {
+                zend_string_release(str);
+            }
+        }
+        zend_hash_destroy(XHPROF_G(function_map));
+        FREE_HASHTABLE(XHPROF_G(function_map));
+    }
+
+    hp_cleanup_stats_array();
 
     if (XHPROF_G(root)) {
         zend_string_release(XHPROF_G(root));
