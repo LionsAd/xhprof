@@ -75,6 +75,113 @@ static zend_always_inline zend_string *hp_get_function_name(zend_execute_data *e
     return real_function_name;
 }
 
+// ---
+
+static zend_always_inline uint64_t hp_make_composite_key(
+    uint32_t parent_id,
+    uint32_t child_id,
+    uint16_t recursion_level
+) {
+    return ((uint64_t)parent_id << 32) |
+           ((uint64_t)child_id << 16) |
+           recursion_level;
+}
+
+static zend_always_inline hp_composite_key hp_decompose_key(uint64_t key) {
+    return (hp_composite_key){
+        .parent_id = (uint32_t)(key >> 32),
+        .child_id = (uint32_t)((key >> 16) & 0xFFFF),
+        .recursion_level = (uint16_t)(key & 0xFFFF)
+    };
+}
+
+static zend_always_inline uint32_t hp_get_function_id(zend_string *function_name)
+{
+    zval *id_zv;
+
+    if ((id_zv = zend_hash_find(XHPROF_G(function_map), function_name)) != NULL) {
+        return Z_LVAL_P(id_zv);
+    }
+
+    if (XHPROF_G(function_counter) >= XHPROF_MAX_FUNCTIONS) {
+        return 0;
+    }
+
+    uint32_t func_id = ++XHPROF_G(function_counter);
+
+    zval id_val;
+    ZVAL_LONG(&id_val, func_id);
+    zend_hash_add(XHPROF_G(function_map), function_name, &id_val);
+
+    zend_string_addref(function_name);
+    zend_hash_index_add_ptr(XHPROF_G(function_map), func_id, function_name);
+
+    return func_id;
+}
+
+static zend_always_inline hp_stat_entry* hp_stats_find_or_add(uint64_t key)
+{
+    hp_stat_vector *arr = &XHPROF_G(stats_array);
+    zval *index_zv;
+
+    if ((index_zv = zend_hash_index_find(arr->index_map, key)) != NULL) {
+        return &arr->entries[Z_LVAL_P(index_zv)];
+    }
+
+    if (arr->count >= arr->capacity) {
+        size_t new_size = arr->capacity * 2;
+        hp_stat_entry *new_entries = realloc(arr->entries,
+                                             sizeof(hp_stat_entry) * new_size);
+        if (!new_entries) {
+            return NULL;
+        }
+        arr->entries = new_entries;
+        arr->capacity = new_size;
+    }
+
+    size_t index = arr->count++;
+    hp_stat_entry *entry = &arr->entries[index];
+    entry->key = key;
+    entry->wt = 0;
+    entry->ct = 0;
+    entry->cpu = 0;
+    entry->mu = 0;
+    entry->pmu = 0;
+
+    zval index_val;
+    ZVAL_LONG(&index_val, index);
+    zend_hash_index_add(arr->index_map, key, &index_val);
+
+    return entry;
+}
+
+static void hp_init_stats_array()
+{
+    XHPROF_G(stats_array).capacity = XHPROF_INITIAL_STATS_SIZE;
+    XHPROF_G(stats_array).count = 0;
+    XHPROF_G(stats_array).entries = malloc(sizeof(hp_stat_entry) *
+                                        XHPROF_INITIAL_STATS_SIZE);
+
+    ALLOC_HASHTABLE(XHPROF_G(stats_array).index_map);
+    zend_hash_init(XHPROF_G(stats_array).index_map, 1024, NULL, NULL, 0);
+}
+
+static void hp_cleanup_stats_array()
+{
+    if (XHPROF_G(stats_array).entries) {
+        free(XHPROF_G(stats_array).entries);
+        XHPROF_G(stats_array).entries = NULL;
+    }
+
+    if (XHPROF_G(stats_array).index_map) {
+        zend_hash_destroy(XHPROF_G(stats_array).index_map);
+        FREE_HASHTABLE(XHPROF_G(stats_array).index_map);
+        XHPROF_G(stats_array).index_map = NULL;
+    }
+}
+
+// ---
+
 static zend_always_inline zend_string *hp_get_trace_callback(zend_string *function_name, zend_execute_data *data)
 {
     zend_string *trace_name;
