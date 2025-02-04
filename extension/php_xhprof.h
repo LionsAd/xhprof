@@ -99,6 +99,7 @@ extern zend_module_entry xhprof_module_entry;
  * profiled. */
 typedef struct hp_entry_t {
     struct hp_entry_t      *prev_hprof;    /* ptr to prev entry being profiled */
+    uint32_t                func_id;       /* 24-bit ID */
     zend_string            *name_hprof;                       /* function name */
     int                     rlvl_hprof;        /* recursion level for function */
     long int                mu_start_hprof;                    /* memory usage */
@@ -110,6 +111,34 @@ typedef struct hp_entry_t {
     int                     is_trace;
 #endif
 } hp_entry_t;
+
+#define XHPROF_MAX_FUNCTIONS 16777215  // 24-bit max
+#define XHPROF_INITIAL_STATS_SIZE 65536  // 64k initial stats
+
+/* Composite key structure for fast comparisons */
+typedef struct _hp_composite_key {
+    uint32_t parent_id;
+    uint32_t child_id;
+    uint16_t recursion_level;
+} hp_composite_key;
+
+/* Statistics entry with minimal fields */
+typedef struct _hp_stat_entry {
+    uint64_t   key;           // parent|child|recursion combined key
+    zend_ulong wt;            // Wall time
+    zend_ulong ct;            // Call count
+    zend_ulong cpu;           // CPU time
+    zend_ulong mu;            // Memory usage
+    zend_ulong pmu;           // Peak memory usage
+} hp_stat_entry;
+
+/* Vector container with exponential growth */
+typedef struct _hp_stat_vector {
+    hp_stat_entry *entries;
+    size_t         count;     // Current number of entries
+    size_t         capacity;  // Current allocated size
+    HashTable     *index_map; // Maps keys to array indexes
+} hp_stat_vector;
 
 typedef struct hp_ignored_functions {
     zend_string **names;
@@ -246,6 +275,10 @@ ZEND_BEGIN_MODULE_GLOBALS(xhprof)
 
     /* counter table indexed by hash value of function names. */
     zend_ulong func_hash_counters[XHPROF_FUNC_HASH_COUNTERS_SIZE];
+
+    uint32_t function_counter;
+    HashTable *function_map;    // Maps both name->id and id->zend_string*
+    hp_stat_vector stats_array;
 
     HashTable *trace_callbacks;
 
