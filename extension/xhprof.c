@@ -999,11 +999,12 @@ void hp_mode_sampled_beginfn_cb(hp_entry_t **entries, hp_entry_t *current)
 void hp_mode_hier_endfn_cb(hp_entry_t **entries)
 {
     hp_entry_t      *top = (*entries);
-    zval            *counts;
-    char            symbol[SCRATCH_BUF_LEN];
     long int        mu_end;
     long int        pmu_end;
     double          wt, cpu;
+    uint32_t parent_id;
+    uint64_t stats_key;
+    hp_stat_entry* counts;
 
 #if PHP_VERSION_ID >= 80000
     if (top->is_trace == 0) {
@@ -1015,36 +1016,32 @@ void hp_mode_hier_endfn_cb(hp_entry_t **entries)
     /* Get end tsc counter */
     wt = cycle_timer() - top->tsc_start;
 
-    /* Get the stat array */
-    hp_get_function_stack(top, 2, symbol, sizeof(symbol));
-
-    counts = zend_hash_str_find(Z_ARRVAL(XHPROF_G(stats_count)), symbol, strlen(symbol));
-
-    if (counts == NULL) {
-        zval count_val;
-        array_init(&count_val);
-        counts = zend_hash_str_update(Z_ARRVAL(XHPROF_G(stats_count)), symbol, strlen(symbol), &count_val);
+    parent_id = 0;
+    if (top->prev_hprof) {
+        parent_id = top->prev_hprof->func_id;
     }
 
-    /* Bump stats in the counts hashtable */
-    hp_inc_count(counts, "ct", 1);
-    hp_inc_count(counts, "wt", wt);
+    stats_key = hp_make_composite_key(parent_id, top->func_id, top->rlvl_hprof);
 
-    if (XHPROF_G(xhprof_flags) & XHPROF_FLAGS_CPU) {
-        cpu = cpu_timer() - top->cpu_start;
+    counts = hp_stats_find_or_add(stats_key);
 
-        /* Bump CPU stats in the counts hashtable */
-        hp_inc_count(counts, "cpu", cpu);
-    }
+    if (counts) {
+        counts->ct++;
+        counts->wt += wt;
 
-    if (XHPROF_G(xhprof_flags) & XHPROF_FLAGS_MEMORY) {
-        /* Get Memory usage */
-        mu_end  = zend_memory_usage(0);
-        pmu_end = zend_memory_peak_usage(0);
+        if (XHPROF_G(xhprof_flags) & XHPROF_FLAGS_CPU) {
+            cpu = cpu_timer() - top->cpu_start;
+            counts->cpu += cpu;
+        }
 
-        /* Bump Memory stats in the counts hashtable */
-        hp_inc_count(counts, "mu",  mu_end - top->mu_start_hprof);
-        hp_inc_count(counts, "pmu", pmu_end - top->pmu_start_hprof);
+        if (XHPROF_G(xhprof_flags) & XHPROF_FLAGS_MEMORY) {
+           // Get Memory usage
+           mu_end  = zend_memory_usage(0);
+           pmu_end = zend_memory_peak_usage(0);
+
+           counts->mu += (mu_end - top->mu_start_hprof);
+           counts->pmu += (pmu_end - top->pmu_start_hprof);
+        }
     }
 
     XHPROF_G(func_hash_counters[top->hash_code])--;

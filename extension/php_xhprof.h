@@ -125,9 +125,9 @@ typedef struct _hp_composite_key {
 /* Statistics entry with minimal fields */
 typedef struct _hp_stat_entry {
     uint64_t   key;           // parent|child|recursion combined key
-    zend_ulong wt;            // Wall time
     zend_ulong ct;            // Call count
-    zend_ulong cpu;           // CPU time
+    double wt;                // Wall time
+    double cpu;               // CPU time
     zend_ulong mu;            // Memory usage
     zend_ulong pmu;           // Peak memory usage
 } hp_stat_entry;
