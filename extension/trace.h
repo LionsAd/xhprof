@@ -252,9 +252,12 @@ static zend_always_inline int begin_profiling(zend_string *root_symbol, zend_exe
             function_name = hp_get_trace_callback(function_name, execute_data);
         }
 
+        uint32_t function_id = hp_get_function_id(function_name);
+
         hp_entry_t *cur_entry = hp_fast_alloc_hprof_entry();
         (cur_entry)->hash_code = hash_code % XHPROF_FUNC_HASH_COUNTERS_SIZE;
         (cur_entry)->name_hprof = function_name;
+        (cur_entry)->func_id = function_id;
         (cur_entry)->prev_hprof = (*(entries));
 #if PHP_VERSION_ID >= 80000
         (cur_entry)->is_trace = 1;
