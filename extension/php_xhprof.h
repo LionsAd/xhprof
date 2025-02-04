@@ -118,8 +118,9 @@ typedef struct hp_entry_t {
 /* Composite key structure for fast comparisons */
 typedef struct _hp_composite_key {
     uint32_t parent_id;
+    uint8_t parent_recursion_level;
     uint32_t child_id;
-    uint16_t recursion_level;
+    uint8_t child_recursion_level;
 } hp_composite_key;
 
 /* Statistics entry with minimal fields */

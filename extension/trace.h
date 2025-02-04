@@ -79,19 +79,22 @@ static zend_always_inline zend_string *hp_get_function_name(zend_execute_data *e
 
 static zend_always_inline uint64_t hp_make_composite_key(
     uint32_t parent_id,
+    uint8_t parent_recursion_level,
     uint32_t child_id,
-    uint16_t recursion_level
+    uint8_t child_recursion_level
 ) {
-    return ((uint64_t)parent_id << 32) |
+    return ((uint64_t)parent_id << 48) |
+           ((uint64_t)parent_recursion_level << 40) |
            ((uint64_t)child_id << 16) |
-           recursion_level;
+           ((uint64_t)child_recursion_level << 8);
 }
 
 static zend_always_inline hp_composite_key hp_decompose_key(uint64_t key) {
     return (hp_composite_key){
-        .parent_id = (uint32_t)(key >> 32),
-        .child_id = (uint32_t)((key >> 16) & 0xFFFF),
-        .recursion_level = (uint16_t)(key & 0xFFFF)
+        .parent_id = (uint32_t)(key >> 48),
+        .parent_recursion_level = (uint8_t)((key >> 40) & 0xFF),
+        .child_id = (uint32_t)((key >> 16) & 0xFFFFFF),
+        .child_recursion_level = (uint8_t)((key >> 8) & 0xFF)
     };
 }
 

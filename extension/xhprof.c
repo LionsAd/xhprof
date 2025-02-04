@@ -692,6 +692,56 @@ void hp_inc_count(zval *counts, char *name, zend_long count)
 
 }
 
+static size_t hp_get_function_name_with_recursion(zend_string *name, uint8_t recursion,
+                                                 char *result_buf, size_t result_len)
+{
+    size_t len;
+
+    if (recursion > 0) {
+        len = snprintf(result_buf, result_len, "%s@%d", ZSTR_VAL(name), recursion);
+    } else {
+        len = snprintf(result_buf, result_len, "%s", ZSTR_VAL(name));
+    }
+
+    return len;
+}
+
+static size_t hp_get_function_symbol(zend_string* parent_name, uint8_t parent_recursion_level,
+                                   zend_string* child_name, uint8_t child_recursion_level,
+                                   char *symbol, size_t symbol_len)
+{
+    size_t len = 0;
+    char temp[SCRATCH_BUF_LEN];
+
+    if (!parent_name) {
+        // Just the child name with recursion if no parent
+        return hp_get_function_name_with_recursion(child_name, child_recursion_level,
+                                                 symbol, symbol_len);
+    }
+
+    // Get parent name with recursion
+    len = hp_get_function_name_with_recursion(parent_name, parent_recursion_level,
+                                            symbol, symbol_len);
+
+    // Add separator
+    if (len < symbol_len - 3) {
+        strncat(symbol + len, "==>", symbol_len - len);
+        len += 3;
+    }
+
+    // Get child name with recursion in temp buffer
+    size_t child_len = hp_get_function_name_with_recursion(child_name,
+                                                          child_recursion_level,
+                                                          temp, sizeof(temp));
+
+    // Append child name
+    if (len < symbol_len - child_len) {
+        strncat(symbol + len, temp, symbol_len - len);
+        len += child_len;
+    }
+
+    return len;
+}
 static void hp_convert_stats_to_php_array()
 {
     hp_stat_vector *arr = &XHPROF_G(stats_array);
@@ -721,25 +771,14 @@ static void hp_convert_stats_to_php_array()
                 continue;
             }
 
-            if (key.recursion_level > 0) {
-                snprintf(symbol, SCRATCH_BUF_LEN, "%s==>%s@%d",
-                    ZSTR_VAL(parent_name),
-                    ZSTR_VAL(child_name),
-                    key.recursion_level);
-            } else {
-                snprintf(symbol, SCRATCH_BUF_LEN, "%s==>%s",
-                    ZSTR_VAL(parent_name),
-                    ZSTR_VAL(child_name));
+            size_t len = hp_get_function_symbol(parent_name, key.parent_recursion_level, child_name, key.child_recursion_level, symbol, sizeof(symbol));
+
+            if (len == 0) {
+                continue;  // Skip if symbol generation failed
             }
         } else {
-            if (key.recursion_level > 0) {
-                snprintf(symbol, SCRATCH_BUF_LEN, "%s@%d",
-                    ZSTR_VAL(child_name),
-                    key.recursion_level);
-            } else {
-                snprintf(symbol, SCRATCH_BUF_LEN, "%s",
-                    ZSTR_VAL(child_name));
-            }
+            snprintf(symbol, SCRATCH_BUF_LEN, "%s",
+                ZSTR_VAL(child_name));
         }
 
         // Find or create stats array for this symbol
@@ -1003,6 +1042,7 @@ void hp_mode_hier_endfn_cb(hp_entry_t **entries)
     long int        pmu_end;
     double          wt, cpu;
     uint32_t parent_id;
+    uint8_t parent_recursion_level;
     uint64_t stats_key;
     hp_stat_entry* counts;
 
@@ -1017,11 +1057,13 @@ void hp_mode_hier_endfn_cb(hp_entry_t **entries)
     wt = cycle_timer() - top->tsc_start;
 
     parent_id = 0;
+    parent_recursion_level = 0;
     if (top->prev_hprof) {
         parent_id = top->prev_hprof->func_id;
+        parent_recursion_level = top->prev_hprof->rlvl_hprof;
     }
 
-    stats_key = hp_make_composite_key(parent_id, top->func_id, top->rlvl_hprof);
+    stats_key = hp_make_composite_key(parent_id, parent_recursion_level, top->func_id, top->rlvl_hprof);
 
     counts = hp_stats_find_or_add(stats_key);
 
