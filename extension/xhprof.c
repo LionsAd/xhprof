@@ -887,6 +887,17 @@ void hp_sample_check(hp_entry_t **entries)
  * High precision timer related functions.
  * ***********************
  */
+static inline zend_ulong cycle_timer_coarse()
+{
+#if defined(__APPLE__) || defined(ZEND_WIN32)
+    return cycle_timer();
+#else
+    struct timespec s;
+    clock_gettime(CLOCK_MONOTONIC_COARSE, &s);
+
+    return s.tv_sec * 1000 * 1000 + s.tv_nsec / 1000;
+#endif
+}
 
 static inline zend_ulong cycle_timer()
 {
@@ -997,7 +1008,7 @@ void hp_mode_sampled_init_cb()
 void hp_mode_hier_beginfn_cb(hp_entry_t **entries, hp_entry_t  *current)
 {
     /* Get start tsc counter */
-    current->tsc_start = cycle_timer();
+    current->tsc_start = cycle_timer_coarse();
 
     /* Get CPU usage */
     if (XHPROF_G(xhprof_flags) & XHPROF_FLAGS_CPU) {
@@ -1054,7 +1065,7 @@ void hp_mode_hier_endfn_cb(hp_entry_t **entries)
 #endif
 
     /* Get end tsc counter */
-    wt = cycle_timer() - top->tsc_start;
+    wt = cycle_timer_coarse() - top->tsc_start;
 
     parent_id = 0;
     parent_recursion_level = 0;
